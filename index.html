@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dominó Online (2 a 4 Jogadores)</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background-color: #2e7d32; color: white; display: flex; flex-direction: column; align-items: center; padding: 15px; min-height: 100vh; }
+        
+        /* Tela de Login */
+        #login-screen { background: rgba(0,0,0,0.5); padding: 30px; border-radius: 10px; text-align: center; margin-top: 50px; }
+        input[type="text"] { padding: 10px; font-size: 16px; border-radius: 5px; border: none; margin-bottom: 10px; width: 220px; text-align: center; }
+        
+        /* Tela de Jogo */
+        #game-screen { display: none; width: 100%; max-width: 900px; flex-direction: column; align-items: center; }
+        #status { font-size: 18px; font-weight: bold; background: rgba(0,0,0,0.4); padding: 8px 16px; border-radius: 20px; margin-bottom: 10px; text-align: center; }
+        #players-bar { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center; }
+        .p-badge { background: rgba(0,0,0,0.3); padding: 6px 12px; border-radius: 5px; font-size: 14px; }
+        .p-badge.active { border: 2px solid #ffd700; background: rgba(255, 215, 0, 0.2); font-weight: bold; }
+
+        /* Mesa */
+        #board-container { width: 100%; height: 220px; background-color: #1b5e20; border: 4px solid #144016; border-radius: 12px; display: flex; align-items: center; overflow-x: auto; padding: 10px; margin-bottom: 15px; }
+        #board { display: flex; align-items: center; gap: 4px; margin: 0 auto; min-width: max-content; }
+
+        /* Peças */
+        .domino { width: 36px; height: 72px; background-color: #fff; color: #000; border: 2px solid #333; border-radius: 5px; display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: 2px; cursor: pointer; user-select: none; font-weight: bold; font-size: 16px; }
+        .domino.horizontal { width: 72px; height: 36px; flex-direction: row; }
+        .half { display: flex; justify-content: center; align-items: center; width: 100%; height: 45%; }
+        .divider-v { width: 100%; height: 2px; background-color: #333; }
+        .divider-h { height: 100%; width: 2px; background-color: #333; }
+
+        /* Mão Privada do Jogador */
+        #my-hand { display: flex; gap: 6px; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; min-height: 90px; width: 100%; justify-content: center; flex-wrap: wrap; }
+        
+        /* Botões */
+        .actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+        button { padding: 10px 20px; font-size: 15px; font-weight: bold; cursor: pointer; background-color: #ffd700; border: none; border-radius: 5px; color: #000; }
+        button:disabled { background-color: #777; cursor: not-allowed; }
+        button.btn-start { background-color: #2e7d32; color: white; border: 1px solid #fff; }
+        button.btn-exit { background-color: #d32f2f; color: white; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. TELA DE LOGIN -->
+    <div id="login-screen">
+        <h2>Dominó Online (2 a 4 Jogadores)</h2>
+        <br>
+        <p>Digite seu apelido para entrar na sala:</p>
+        <br>
+        <input type="text" id="username" placeholder="Seu apelido..." maxlength="12">
+        <br>
+        <button id="btn-login">Entrar na Partida</button>
+    </div>
+
+    <!-- 2. TELA DO JOGO -->
+    <div id="game-screen">
+        <div id="status">Conectando...</div>
+        <div id="players-bar"></div>
+
+        <div id="board-container">
+            <div id="board"></div>
+        </div>
+
+        <p style="margin-bottom: 5px;">Sua Mão (Visível apenas para você):</p>
+        <div id="my-hand"></div>
+
+        <div class="actions">
+            <button id="btn-start-now" class="btn-start" style="display: none;">Iniciar Jogo Agora</button>
+            <button id="btn-pass" disabled>Passar Vez</button>
+            <button id="btn-leave" class="btn-exit">Sair do Jogo</button>
+        </div>
+    </div>
+
+    <!-- SCRIPT FIREBASE + LÓGICA DO JOGO -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js";
+        import { getDatabase, ref, runTransaction, onValue, update, get } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDo7X9I21Lkh-CbIb16dsVhQgdNL2II5jI",
+            authDomain: "leo-entregas.firebaseapp.com",
+            databaseURL: "https://leo-entregas-default-rtdb.firebaseio.com",
+            projectId: "leo-entregas",
+            storageBucket: "leo-entregas.firebasestorage.app",
+            messagingSenderId: "733713037931",
+            appId: "1:733713037931:web:70a12d61e0d484e97c0f2e",
+            measurementId: "G-JJEEJPY82X"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const db = getDatabase(app);
+
+        let myPlayerIndex = null;
+        let myName = '';
+        const roomId = "sala_01";
+
+        document.getElementById('btn-login').addEventListener('click', login);
+        document.getElementById('btn-pass').addEventListener('click', passTurn);
+        document.getElementById('btn-leave').addEventListener('click', leaveGame);
+        document.getElementById('btn-start-now').addEventListener('click', forceStartGame);
+
+        function login() {
+            myName = document.getElementById('username').value.trim();
+            if (!myName) return alert("Digite um nome!");
+
+            const roomRef = ref(db, `rooms/${roomId}`);
+            
+            runTransaction(roomRef, (room) => {
+                if (!room) {
+                    room = { players: [], gameStarted: false, boardState: [], turn: 0 };
+                }
+                if (room.players && room.players.length >= 4) {
+                    return; // Sala cheia
+                }
+                if (!room.players) room.players = [];
+                
+                room.players.push({ name: myName, hand: [] });
+                return room;
+            }).then((result) => {
+                if (!result.committed) {
+                    alert("A sala já está cheia (máximo 4 jogadores)!");
+                } else {
+                    const roomData = result.snapshot.val();
+                    myPlayerIndex = roomData.players.length - 1;
+
+                    document.getElementById('login-screen').style.display = 'none';
+                    document.getElementById('game-screen').style.display = 'flex';
+
+                    // Inicia automaticamente se atingir 4 jogadores
+                    if (roomData.players.length === 4 && !roomData.gameStarted) {
+                        startGame(roomData.players);
+                    } else {
+                        listenGameUpdates();
+                    }
+                }
+            }).catch(() => {
+                alert("Erro ao conectar ao banco de dados!");
+            });
+        }
+
+        function forceStartGame() {
+            get(ref(db, `rooms/${roomId}`)).then((snapshot) => {
+                const data = snapshot.val();
+                if (data && data.players && data.players.length >= 2 && !data.gameStarted) {
+                    startGame(data.players);
+                }
+            });
+        }
+
+        function startGame(playersList) {
+            let deck = [];
+            for (let i = 0; i <= 6; i++) {
+                for (let j = i; j <= 6; j++) {
+                    deck.push({ v1: i, v2: j });
+                }
+            }
+            deck.sort(() => Math.random() - 0.5);
+
+            // Distribui 7 peças para cada jogador ativo (2, 3 ou 4)
+            const numPlayers = playersList.length;
+            for (let p = 0; p < numPlayers; p++) {
+                playersList[p].hand = deck.splice(0, 7);
+            }
+
+            // Descobre quem tem a maior bucha (começando pelo 12zão / 6-6)
+            let startingTurn = 0;
+            let foundFirst = false;
+            for (let doubleVal = 6; doubleVal >= 0; doubleVal--) {
+                for (let p = 0; p < numPlayers; p++) {
+                    if (playersList[p].hand.some(t => t.v1 === doubleVal && t.v2 === doubleVal)) {
+                        startingTurn = p;
+                        foundFirst = true;
+                        break;
+                    }
+                }
+                if (foundFirst) break;
+            }
+
+            update(ref(db, `rooms/${roomId}`), {
+                players: playersList,
+                boardState: [],
+                leftValue: null,
+                rightValue: null,
+                turn: startingTurn,
+                passesInARow: 0,
+                gameStarted: true,
+                gameOver: false
+            });
+
+            listenGameUpdates();
+        }
+
+        function listenGameUpdates() {
+            onValue(ref(db, `rooms/${roomId}`), (snapshot) => {
+                const data = snapshot.val();
+                if (!data || !data.players || myPlayerIndex === null || !data.players[myPlayerIndex]) return;
+
+                const isMyTurn = (data.turn === myPlayerIndex) && data.gameStarted && !data.gameOver;
+                const totalPlayers = data.players.length;
+
+                // Mostrar/Esconder botão de iniciar com 2 ou mais jogadores
+                const btnStartNow = document.getElementById('btn-start-now');
+                if (!data.gameStarted && totalPlayers >= 2) {
+                    btnStartNow.style.display = 'inline-block';
+                } else {
+                    btnStartNow.style.display = 'none';
+                }
+
+                // 1. Lista de Jogadores
+                const pBar = document.getElementById('players-bar');
+                pBar.innerHTML = '';
+                data.players.forEach((p, idx) => {
+                    const count = p.hand ? p.hand.length : 0;
+                    pBar.innerHTML += `<div class="p-badge ${idx === data.turn && data.gameStarted ? 'active' : ''}">${p.name} (${count} peças)</div>`;
+                });
+
+                // 2. Status
+                const statusDiv = document.getElementById('status');
+                if (!data.gameStarted) {
+                    statusDiv.innerText = `Aguardando jogadores (${totalPlayers}/4). Mínimo de 2 para jogar!`;
+                } else if (data.gameOver) {
+                    statusDiv.innerText = data.winnerText || `Fim de Jogo!`;
+                } else {
+                    statusDiv.innerText = isMyTurn ? `SUA VEZ DE JOGAR!` : `Aguardando a vez de ${data.players[data.turn].name}...`;
+                }
+
+                // 3. Mesa
+                const boardDiv = document.getElementById('board');
+                boardDiv.innerHTML = '';
+                if (data.boardState) {
+                    data.boardState.forEach(tile => {
+                        boardDiv.appendChild(renderTile(tile, true));
+                    });
+                }
+
+                // 4. Mão Privada
+                const myHandDiv = document.getElementById('my-hand');
+                myHandDiv.innerHTML = '';
+                const myHandData = data.players[myPlayerIndex]?.hand || [];
+
+                myHandData.forEach((tile, index) => {
+                    const tileEl = renderTile(tile, false);
+                    if (isMyTurn) {
+                        tileEl.onclick = () => playTile(tile, index, data);
+                    } else {
+                        tileEl.style.opacity = '0.5';
+                        tileEl.style.cursor = 'not-allowed';
+                    }
+                    myHandDiv.appendChild(tileEl);
+                });
+
+                // 5. Botão Passar Vez
+                const btnPass = document.getElementById('btn-pass');
+                if (isMyTurn && data.boardState && data.boardState.length > 0) {
+                    const canPlay = myHandData.some(t => 
+                        t.v1 === data.leftValue || t.v2 === data.leftValue ||
+                        t.v1 === data.rightValue || t.v2 === data.rightValue
+                    );
+                    btnPass.disabled = canPlay;
+                } else {
+                    btnPass.disabled = true;
+                }
+            });
+        }
+
+        function renderTile(tile, isHorizontal) {
+            const div = document.createElement('div');
+            div.className = `domino ${isHorizontal ? 'horizontal' : ''}`;
+            div.innerHTML = isHorizontal ? 
+                `<div class="half">${tile.v1}</div><div class="divider-h"></div><div class="half">${tile.v2}</div>` :
+                `<div class="half">${tile.v1}</div><div class="divider-v"></div><div class="half">${tile.v2}</div>`;
+            return div;
+        }
+
+        function playTile(tile, tileIndex, data) {
+            let board = data.boardState || [];
+            let left = data.leftValue;
+            let right = data.rightValue;
+            let side = 'right';
+
+            if (board.length === 0) {
+                board.push(tile);
+                left = tile.v1;
+                right = tile.v2;
+            } else {
+                const fitsLeft = (tile.v1 === left || tile.v2 === left);
+                const fitsRight = (tile.v1 === right || tile.v2 === right);
+
+                if (fitsLeft && fitsRight) {
+                    side = confirm("OK = Jogar na ESQUERDA | Cancelar = Jogar na DIREITA") ? 'left' : 'right';
+                } else if (fitsLeft) {
+                    side = 'left';
+                } else if (fitsRight) {
+                    side = 'right';
+                } else {
+                    alert("Esta peça não cabe em nenhuma ponta da mesa!");
+                    return;
+                }
+
+                if (side === 'left') {
+                    if (tile.v1 === left) {
+                        board.unshift({ v1: tile.v2, v2: tile.v1 });
+                        left = tile.v2;
+                    } else {
+                        board.unshift(tile);
+                        left = tile.v1;
+                    }
+                } else {
+                    if (tile.v1 === right) {
+                        board.push(tile);
+                        right = tile.v2;
+                    } else {
+                        board.push({ v1: tile.v2, v2: tile.v1 });
+                        right = tile.v1;
+                    }
+                }
+            }
+
+            data.players[myPlayerIndex].hand.splice(tileIndex, 1);
+
+            let isWin = data.players[myPlayerIndex].hand.length === 0;
+            let updates = {
+                boardState: board,
+                leftValue: left,
+                rightValue: right,
+                players: data.players,
+                passesInARow: 0,
+                turn: (data.turn + 1) % data.players.length
+            };
+
+            if (isWin) {
+                updates.gameOver = true;
+                updates.winnerText = `🏆 O jogador ${data.players[myPlayerIndex].name} VENCEU!`;
+            }
+
+            update(ref(db, `rooms/${roomId}`), updates);
+        }
+
+        function passTurn() {
+            get(ref(db, `rooms/${roomId}`)).then((snapshot) => {
+                const data = snapshot.val();
+                let passes = (data.passesInARow || 0) + 1;
+                let totalPlayers = data.players.length;
+
+                let updates = {
+                    passesInARow: passes,
+                    turn: (data.turn + 1) % totalPlayers
+                };
+
+                // Tranca se todos os jogadores passarem consecutivamente
+                if (passes >= totalPlayers) {
+                    updates.gameOver = true;
+                    updates.winnerText = "🔒 Jogo Trancado!";
+                }
+
+                update(ref(db, `rooms/${roomId}`), updates);
+            });
+        }
+
+        function leaveGame() {
+            if (myPlayerIndex === null) return;
+
+            const roomRef = ref(db, `rooms/${roomId}`);
+            runTransaction(roomRef, (room) => {
+                if (room && room.players) {
+                    room.players.splice(myPlayerIndex, 1);
+                    room.gameStarted = false;
+                    room.boardState = [];
+                    room.turn = 0;
+                }
+                return room;
+            }).then(() => {
+                myPlayerIndex = null;
+                document.getElementById('game-screen').style.display = 'none';
+                document.getElementById('login-screen').style.display = 'block';
+                document.getElementById('username').value = '';
+            });
+        }
+    </script>
+</body>
+  </html>
+          
